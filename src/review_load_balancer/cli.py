@@ -1,92 +1,150 @@
-import argparse
+from __future__ import annotations
+
 from pathlib import Path
 
-from .balancer import load_report, plan_assignments
-from .db import run_sql
+import typer
+from rich import print
+from rich.table import Table
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-SQL_DIR = BASE_DIR / "sql"
+from .allocator import fetch_reviewers, fetch_unassigned_applications, persist_assignments, plan_assignments
+from .db import db_cursor, load_sql, SCHEMA
+
+app = typer.Typer(help="Group Scholar review load balancing CLI.")
+
+SQL_DIR = Path(__file__).resolve().parents[3] / "sql"
 
 
-def _print_report() -> None:
-    reviewer_rows, app_rows = load_report()
-    print("Reviewer Load")
-    for row in reviewer_rows:
-        print(
-            f"- {row['name']} ({row['email']}): {row['active_count']}/{row['max_load']} active"
+@app.command("init-db")
+def init_db() -> None:
+    """Create schema and tables."""
+    sql = load_sql(SQL_DIR / "001_init.sql")
+    with db_cursor() as cursor:
+        cursor.execute(sql)
+    print("[green]Database initialized.[/green]")
+
+
+@app.command("seed")
+def seed() -> None:
+    """Insert seed data into production database."""
+    sql = load_sql(SQL_DIR / "seed.sql")
+    with db_cursor() as cursor:
+        cursor.execute(sql)
+    print("[green]Seed data inserted.[/green]")
+
+
+@app.command("status")
+def status() -> None:
+    """Show reviewer load and capacity."""
+    reviewers = fetch_reviewers()
+    table = Table(title="Reviewer Load Status")
+    table.add_column("Reviewer")
+    table.add_column("Assigned", justify="right")
+    table.add_column("Capacity", justify="right")
+    table.add_column("Utilization", justify="right")
+    table.add_column("Expertise")
+
+    for reviewer in reviewers:
+        utilization = 0.0
+        if reviewer.capacity:
+            utilization = reviewer.assigned / reviewer.capacity
+        table.add_row(
+            reviewer.name,
+            str(reviewer.assigned),
+            str(reviewer.capacity),
+            f"{utilization:.0%}",
+            ", ".join(reviewer.tags),
         )
-    print("\nApplication Status")
-    for row in app_rows:
-        print(f"- {row['status']}: {row['count']}")
+
+    print(table)
 
 
-def _init_db() -> None:
-    run_sql(SQL_DIR / "schema.sql")
-    print("Database schema ensured.")
+@app.command("plan")
+def plan(
+    limit: int | None = typer.Option(None, help="Maximum applications to assign."),
+    apply: bool = typer.Option(False, help="Persist assignments."),
+) -> None:
+    """Plan assignments for unassigned applications."""
+    reviewers = fetch_reviewers()
+    applications = fetch_unassigned_applications(limit=limit)
+    assignments = plan_assignments(reviewers, applications)
+
+    if not assignments:
+        print("[yellow]No assignments created.[/yellow]")
+        return
+
+    table = Table(title="Assignment Plan")
+    table.add_column("Application")
+    table.add_column("Reviewer")
+    table.add_column("Score", justify="right")
+
+    reviewer_lookup = {reviewer.id: reviewer for reviewer in reviewers}
+    for assignment in assignments:
+        reviewer = reviewer_lookup[assignment.reviewer_id]
+        table.add_row(str(assignment.application_id), reviewer.name, f"{assignment.score:.2f}")
+
+    print(table)
+
+    if apply:
+        inserted = persist_assignments(assignments)
+        print(f"[green]Inserted {inserted} assignments.[/green]")
 
 
-def _seed_db() -> None:
-    run_sql(SQL_DIR / "seed.sql")
-    print("Seed data loaded.")
-
-
-def _balance(args: argparse.Namespace) -> None:
-    summary = plan_assignments(limit=args.limit, dry_run=args.dry_run)
-    print(f"Planned assignments: {len(summary.planned)}")
-    for plan in summary.planned:
-        print(
-            f"- application {plan.application_id} -> reviewer {plan.reviewer_id} ({plan.reason})"
+@app.command("queue")
+def queue() -> None:
+    """Show the unassigned application queue."""
+    applications = fetch_unassigned_applications()
+    table = Table(title="Unassigned Applications")
+    table.add_column("ID", justify="right")
+    table.add_column("Applicant")
+    table.add_column("Program")
+    table.add_column("Tags")
+    for application in applications:
+        table.add_row(
+            str(application.id),
+            application.applicant_name,
+            application.program,
+            ", ".join(application.tags),
         )
-    if args.dry_run:
-        print("Dry run enabled. No changes written.")
-    else:
-        print(f"Applications moved to in_review: {summary.applications_updated}")
+    print(table)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Balance scholarship review assignments across reviewers."
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+@app.command("snapshot")
+def snapshot() -> None:
+    """Show assignment coverage snapshot."""
+    query = f"""
+        SELECT r.name,
+               COUNT(a.id) AS assigned,
+               AVG(a.score) AS avg_score,
+               MIN(a.assigned_at) AS first_assigned,
+               MAX(a.assigned_at) AS last_assigned
+          FROM {SCHEMA}.reviewers r
+          LEFT JOIN {SCHEMA}.assignments a
+            ON a.reviewer_id = r.id
+         GROUP BY r.name
+         ORDER BY r.name;
+    """
+    with db_cursor() as cursor:
+        cursor.execute(query)
+        rows = cursor.fetchall()
 
-    subparsers.add_parser("init-db", help="Create schema and tables in the database.")
-    subparsers.add_parser("seed", help="Insert sample data into the database.")
+    table = Table(title="Assignment Snapshot")
+    table.add_column("Reviewer")
+    table.add_column("Assigned", justify="right")
+    table.add_column("Avg Score", justify="right")
+    table.add_column("First Assigned")
+    table.add_column("Last Assigned")
 
-    balance_parser = subparsers.add_parser(
-        "balance", help="Assign pending applications to reviewers."
-    )
-    balance_parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Maximum number of assignments to create.",
-    )
-    balance_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Plan assignments without writing to the database.",
-    )
+    for name, assigned, avg_score, first_assigned, last_assigned in rows:
+        table.add_row(
+            name,
+            str(assigned),
+            f"{(avg_score or 0):.2f}",
+            str(first_assigned) if first_assigned else "-",
+            str(last_assigned) if last_assigned else "-",
+        )
 
-    subparsers.add_parser("report", help="Show reviewer load and application status.")
-
-    return parser
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if args.command == "init-db":
-        _init_db()
-    elif args.command == "seed":
-        _seed_db()
-    elif args.command == "balance":
-        _balance(args)
-    elif args.command == "report":
-        _print_report()
-    else:
-        parser.error("Unknown command.")
+    print(table)
 
 
 if __name__ == "__main__":
-    main()
+    app()
