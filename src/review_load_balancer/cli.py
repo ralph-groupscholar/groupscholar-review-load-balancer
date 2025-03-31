@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -141,6 +142,74 @@ def snapshot() -> None:
             f"{(avg_score or 0):.2f}",
             str(first_assigned) if first_assigned else "-",
             str(last_assigned) if last_assigned else "-",
+        )
+
+    print(table)
+
+
+@app.command("aging")
+def aging(limit: int = typer.Option(10, help="Max unassigned applications to list.")) -> None:
+    """Show unassigned queue age stats and oldest applications."""
+    stats_query = f"""
+        SELECT COUNT(*) AS unassigned_count,
+               MIN(a.submitted_at) AS oldest_submitted,
+               MAX(a.submitted_at) AS newest_submitted,
+               AVG(EXTRACT(EPOCH FROM (NOW() - a.submitted_at))) AS avg_age_seconds
+          FROM {SCHEMA}.applications a
+          LEFT JOIN {SCHEMA}.assignments s
+            ON s.application_id = a.id
+         WHERE s.id IS NULL;
+    """
+    list_query = f"""
+        SELECT a.id,
+               a.applicant_name,
+               a.program,
+               a.submitted_at,
+               COALESCE(a.tags, '{{}}') AS tags
+          FROM {SCHEMA}.applications a
+          LEFT JOIN {SCHEMA}.assignments s
+            ON s.application_id = a.id
+         WHERE s.id IS NULL
+         ORDER BY a.submitted_at ASC
+         LIMIT %s;
+    """
+    with db_cursor() as cursor:
+        cursor.execute(stats_query)
+        stats = cursor.fetchone()
+        cursor.execute(list_query, (limit,))
+        rows = cursor.fetchall()
+
+    total = stats["unassigned_count"] or 0
+    avg_age_seconds = stats["avg_age_seconds"] or 0
+    avg_age_days = avg_age_seconds / 86400
+    print(
+        f"[bold]Unassigned:[/bold] {total} | "
+        f"[bold]Avg Age:[/bold] {avg_age_days:.1f} days"
+    )
+
+    if not rows:
+        print("[yellow]No unassigned applications.[/yellow]")
+        return
+
+    table = Table(title="Oldest Unassigned Applications")
+    table.add_column("ID", justify="right")
+    table.add_column("Applicant")
+    table.add_column("Program")
+    table.add_column("Age (days)", justify="right")
+    table.add_column("Tags")
+
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        submitted_at = row["submitted_at"]
+        if submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=timezone.utc)
+        age_days = (now - submitted_at).total_seconds() / 86400
+        table.add_row(
+            str(row["id"]),
+            row["applicant_name"],
+            row["program"],
+            f"{age_days:.1f}",
+            ", ".join(row["tags"] or []),
         )
 
     print(table)

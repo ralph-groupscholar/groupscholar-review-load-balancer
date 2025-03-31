@@ -28,8 +28,12 @@ Set `DATABASE_URL` to the production database before running commands.
 ```bash
 bin/review-load-balancer init-db
 bin/review-load-balancer seed
-bin/review-load-balancer balance
-bin/review-load-balancer report
+bin/review-load-balancer status
+bin/review-load-balancer plan --limit 10
+bin/review-load-balancer plan --apply
+bin/review-load-balancer queue
+bin/review-load-balancer snapshot
+bin/review-load-balancer aging --limit 10
 ```
 
 ## Notes
