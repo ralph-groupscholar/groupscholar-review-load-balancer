@@ -109,6 +109,95 @@ def queue() -> None:
     print(table)
 
 
+@app.command("balance")
+def balance(threshold: float = typer.Option(0.1, help="Utilization delta threshold for alerts.")) -> None:
+    """Show utilization balance vs overall target and capacity deltas."""
+    reviewers = fetch_reviewers()
+    total_capacity = sum(reviewer.capacity for reviewer in reviewers if reviewer.capacity > 0)
+    total_assigned = sum(reviewer.assigned for reviewer in reviewers)
+
+    if total_capacity <= 0:
+        print("[yellow]No reviewer capacity available.[/yellow]")
+        return
+
+    target_utilization = total_assigned / total_capacity
+
+    table = Table(title="Utilization Balance")
+    table.add_column("Reviewer")
+    table.add_column("Assigned", justify="right")
+    table.add_column("Capacity", justify="right")
+    table.add_column("Utilization", justify="right")
+    table.add_column("Target", justify="right")
+    table.add_column("Delta", justify="right")
+    table.add_column("Action", justify="right")
+
+    over_total = 0
+    under_total = 0
+
+    for reviewer in reviewers:
+        if reviewer.capacity <= 0:
+            utilization = 0.0
+        else:
+            utilization = reviewer.assigned / reviewer.capacity
+        target_assigned = reviewer.capacity * target_utilization
+        delta = utilization - target_utilization
+        action = "-"
+        if delta >= threshold:
+            to_offload = int(round(reviewer.assigned - target_assigned))
+            if to_offload > 0:
+                action = f"offload {to_offload}"
+                over_total += to_offload
+        elif delta <= -threshold:
+            to_take = int(round(target_assigned - reviewer.assigned))
+            if to_take > 0:
+                action = f"take {to_take}"
+                under_total += to_take
+
+        table.add_row(
+            reviewer.name,
+            str(reviewer.assigned),
+            str(reviewer.capacity),
+            f"{utilization:.0%}",
+            f"{target_utilization:.0%}",
+            f"{delta:+.0%}",
+            action,
+        )
+
+    print(
+        f"[bold]Target Utilization:[/bold] {target_utilization:.0%} | "
+        f"[bold]Overload Moves:[/bold] {over_total} | "
+        f"[bold]Underload Capacity:[/bold] {under_total}"
+    )
+    print(table)
+
+
+@app.command("coverage")
+def coverage(top: int = typer.Option(10, help="Top unmatched tags to show.")) -> None:
+    """Show tag demand in the queue that lacks reviewer coverage."""
+    reviewers = fetch_reviewers()
+    applications = fetch_unassigned_applications()
+
+    reviewer_tags = {tag for reviewer in reviewers for tag in reviewer.tags}
+    tag_counts: dict[str, int] = {}
+    for application in applications:
+        for tag in application.tags:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+    unmatched = {tag: count for tag, count in tag_counts.items() if tag not in reviewer_tags}
+    if not unmatched:
+        print("[green]All queued tags are covered by reviewer expertise.[/green]")
+        return
+
+    table = Table(title="Uncovered Queue Tags")
+    table.add_column("Tag")
+    table.add_column("Queue Count", justify="right")
+
+    for tag, count in sorted(unmatched.items(), key=lambda item: item[1], reverse=True)[:top]:
+        table.add_row(tag, str(count))
+
+    print(table)
+
+
 @app.command("snapshot")
 def snapshot() -> None:
     """Show assignment coverage snapshot."""
@@ -210,6 +299,81 @@ def aging(limit: int = typer.Option(10, help="Max unassigned applications to lis
             row["program"],
             f"{age_days:.1f}",
             ", ".join(row["tags"] or []),
+        )
+
+    print(table)
+
+
+@app.command("coverage")
+def coverage() -> None:
+    """Show per-program assignment coverage and remaining capacity."""
+    program_query = f"""
+        SELECT a.program,
+               COUNT(*) AS total_apps,
+               COUNT(s.id) AS assigned_apps,
+               COUNT(*) - COUNT(s.id) AS unassigned_apps,
+               AVG(EXTRACT(EPOCH FROM (NOW() - a.submitted_at))) AS avg_age_seconds
+          FROM {SCHEMA}.applications a
+          LEFT JOIN {SCHEMA}.assignments s
+            ON s.application_id = a.id
+         GROUP BY a.program
+         ORDER BY unassigned_apps DESC, a.program;
+    """
+    capacity_query = f"""
+        SELECT COALESCE(SUM(r.capacity), 0) AS total_capacity,
+               COALESCE(SUM(assignments.assigned), 0) AS total_assigned
+          FROM {SCHEMA}.reviewers r
+          LEFT JOIN (
+              SELECT reviewer_id, COUNT(*) AS assigned
+                FROM {SCHEMA}.assignments
+               WHERE status IN ('assigned', 'in_review')
+               GROUP BY reviewer_id
+          ) assignments
+            ON assignments.reviewer_id = r.id
+         WHERE r.active = TRUE;
+    """
+    with db_cursor() as cursor:
+        cursor.execute(program_query)
+        rows = cursor.fetchall()
+        cursor.execute(capacity_query)
+        capacity = cursor.fetchone()
+
+    total_capacity = capacity["total_capacity"] or 0
+    total_assigned = capacity["total_assigned"] or 0
+    remaining = max(total_capacity - total_assigned, 0)
+    utilization = (total_assigned / total_capacity) if total_capacity else 0
+
+    print(
+        f"[bold]Capacity:[/bold] {total_assigned}/{total_capacity} "
+        f"({utilization:.0%}) | [bold]Remaining:[/bold] {remaining}"
+    )
+
+    if not rows:
+        print("[yellow]No applications found.[/yellow]")
+        return
+
+    table = Table(title="Program Coverage")
+    table.add_column("Program")
+    table.add_column("Total", justify="right")
+    table.add_column("Assigned", justify="right")
+    table.add_column("Unassigned", justify="right")
+    table.add_column("% Assigned", justify="right")
+    table.add_column("Avg Age (days)", justify="right")
+
+    for row in rows:
+        total_apps = row["total_apps"] or 0
+        assigned_apps = row["assigned_apps"] or 0
+        unassigned_apps = row["unassigned_apps"] or 0
+        avg_age_seconds = row["avg_age_seconds"] or 0
+        avg_age_days = avg_age_seconds / 86400
+        percent_assigned = (assigned_apps / total_apps) if total_apps else 0
+        table.add_row(
+            row["program"],
+            str(total_apps),
+            str(assigned_apps),
+            str(unassigned_apps),
+            f"{percent_assigned:.0%}",
+            f"{avg_age_days:.1f}",
         )
 
     print(table)

@@ -6,3 +6,7 @@
 - Documented setup and database usage in README.
 - Added an aging report command to surface oldest unassigned applications and queue age stats.
 - 2026-02-08: Built DB-backed CLI for review balancing, added schema/seed data, and ran production initialization + seeding.
+
+## 2026-02-08
+- Added balance and coverage CLI commands to flag utilization drift and uncovered queue tags.
+- Documented new commands in README.
