@@ -304,8 +304,8 @@ def aging(limit: int = typer.Option(10, help="Max unassigned applications to lis
     print(table)
 
 
-@app.command("coverage")
-def coverage() -> None:
+@app.command("programs")
+def programs() -> None:
     """Show per-program assignment coverage and remaining capacity."""
     program_query = f"""
         SELECT a.program,

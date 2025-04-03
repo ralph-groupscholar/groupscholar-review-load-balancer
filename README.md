@@ -36,7 +36,7 @@ bin/review-load-balancer coverage --top 10
 bin/review-load-balancer queue
 bin/review-load-balancer snapshot
 bin/review-load-balancer aging --limit 10
-bin/review-load-balancer coverage
+bin/review-load-balancer programs
 ```
 
 ## Notes
