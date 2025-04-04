@@ -37,8 +37,15 @@ bin/review-load-balancer queue
 bin/review-load-balancer snapshot
 bin/review-load-balancer aging --limit 10
 bin/review-load-balancer programs
+bin/review-load-balancer backlog --stale-days 7 --limit 10
 ```
 
 ## Notes
 - Assignments are created in `review_load_balancer.assignments`.
 - Applications move to `in_review` once their required reviews are assigned.
+
+## Tests
+
+```bash
+pytest
+```

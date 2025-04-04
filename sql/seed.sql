@@ -19,3 +19,27 @@ VALUES
     ('Jada Stewart', 'Leadership Fellows', ARRAY['leadership', 'essay'], NOW() - INTERVAL '1 day', 'submitted'),
     ('Leo Kim', 'Entrepreneur Track', ARRAY['business', 'finance'], NOW() - INTERVAL '1 day', 'submitted')
 ON CONFLICT DO NOTHING;
+
+INSERT INTO review_load_balancer.assignments (application_id, reviewer_id, status, score, assigned_at)
+SELECT app.id, reviewer.id, 'assigned', 0.92, NOW() - INTERVAL '6 days'
+  FROM review_load_balancer.applications app
+  JOIN review_load_balancer.reviewers reviewer
+    ON reviewer.email = 'amina.lewis@groupscholar.com'
+ WHERE app.applicant_name = 'Maya Rivera'
+ON CONFLICT (application_id) DO NOTHING;
+
+INSERT INTO review_load_balancer.assignments (application_id, reviewer_id, status, score, assigned_at)
+SELECT app.id, reviewer.id, 'in_review', 0.87, NOW() - INTERVAL '8 days'
+  FROM review_load_balancer.applications app
+  JOIN review_load_balancer.reviewers reviewer
+    ON reviewer.email = 'david.chen@groupscholar.com'
+ WHERE app.applicant_name = 'Ethan Brooks'
+ON CONFLICT (application_id) DO NOTHING;
+
+INSERT INTO review_load_balancer.assignments (application_id, reviewer_id, status, score, assigned_at)
+SELECT app.id, reviewer.id, 'assigned', 0.89, NOW() - INTERVAL '3 days'
+  FROM review_load_balancer.applications app
+  JOIN review_load_balancer.reviewers reviewer
+    ON reviewer.email = 'sofia.ramirez@groupscholar.com'
+ WHERE app.applicant_name = 'Lila Nguyen'
+ON CONFLICT (application_id) DO NOTHING;

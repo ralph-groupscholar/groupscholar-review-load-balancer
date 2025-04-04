@@ -7,8 +7,16 @@ import typer
 from rich import print
 from rich.table import Table
 
-from .allocator import fetch_reviewers, fetch_unassigned_applications, persist_assignments, plan_assignments
+from .allocator import (
+    fetch_active_assignments,
+    fetch_reviewers,
+    fetch_unassigned_applications,
+    persist_assignments,
+    plan_assignments,
+    propose_reassignments,
+)
 from .db import db_cursor, load_sql, SCHEMA
+from .reports import BacklogAssignment, build_backlog_report
 
 app = typer.Typer(help="Group Scholar review load balancing CLI.")
 
@@ -168,6 +176,34 @@ def balance(threshold: float = typer.Option(0.1, help="Utilization delta thresho
         f"[bold]Overload Moves:[/bold] {over_total} | "
         f"[bold]Underload Capacity:[/bold] {under_total}"
     )
+    print(table)
+
+
+@app.command("reassign")
+def reassign(threshold: float = typer.Option(0.1, help="Utilization delta threshold for planning moves.")) -> None:
+    """Suggest reassignment moves to rebalance reviewer utilization."""
+    reviewers = fetch_reviewers()
+    assignments = fetch_active_assignments()
+    plans = propose_reassignments(reviewers, assignments, threshold=threshold)
+
+    if not plans:
+        print("[green]No reassignment moves needed.[/green]")
+        return
+
+    table = Table(title="Reassignment Plan")
+    table.add_column("Application", justify="right")
+    table.add_column("From Reviewer")
+    table.add_column("To Reviewer")
+    table.add_column("Score", justify="right")
+
+    for plan in plans:
+        table.add_row(
+            str(plan.application_id),
+            plan.from_reviewer_name,
+            plan.to_reviewer_name,
+            f"{plan.score:.2f}",
+        )
+
     print(table)
 
 
@@ -377,6 +413,88 @@ def programs() -> None:
         )
 
     print(table)
+
+
+@app.command("backlog")
+def backlog(
+    stale_days: int = typer.Option(7, help="Days since assignment to consider stale."),
+    limit: int = typer.Option(10, help="Max oldest assignments to list."),
+) -> None:
+    """Show review backlog aging by reviewer and oldest assignments."""
+    query = f"""
+        SELECT r.name AS reviewer,
+               a.applicant_name,
+               a.program,
+               s.assigned_at
+          FROM {SCHEMA}.assignments s
+          JOIN {SCHEMA}.reviewers r
+            ON r.id = s.reviewer_id
+          JOIN {SCHEMA}.applications a
+            ON a.id = s.application_id
+         WHERE s.status IN ('assigned', 'in_review')
+         ORDER BY s.assigned_at ASC;
+    """
+    with db_cursor() as cursor:
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+    if not rows:
+        print("[yellow]No active review assignments.[/yellow]")
+        return
+
+    assignments = [
+        BacklogAssignment(
+            reviewer=row["reviewer"],
+            applicant=row["applicant_name"],
+            program=row["program"],
+            assigned_at=row["assigned_at"],
+        )
+        for row in rows
+    ]
+    now = datetime.now(timezone.utc)
+    report = build_backlog_report(assignments, now, stale_days)
+
+    print(
+        f"[bold]Active Assignments:[/bold] {report.total} | "
+        f"[bold]Stale (>{stale_days}d):[/bold] {report.stale} | "
+        f"[bold]Avg Age:[/bold] {report.avg_age_days:.1f} days | "
+        f"[bold]Oldest:[/bold] {report.oldest_age_days:.1f} days"
+    )
+
+    bucket_table = Table(title="Backlog Age Buckets")
+    bucket_table.add_column("Bucket")
+    bucket_table.add_column("Count", justify="right")
+    for bucket, count in report.bucket_counts.items():
+        bucket_table.add_row(bucket, str(count))
+    print(bucket_table)
+
+    reviewer_table = Table(title="Reviewer Backlog")
+    reviewer_table.add_column("Reviewer")
+    reviewer_table.add_column("Assigned", justify="right")
+    reviewer_table.add_column("Stale", justify="right")
+    reviewer_table.add_column("Oldest (days)", justify="right")
+    for reviewer in report.reviewer_stats:
+        reviewer_table.add_row(
+            reviewer.reviewer,
+            str(reviewer.total),
+            str(reviewer.stale),
+            f"{reviewer.oldest_age_days:.1f}",
+        )
+    print(reviewer_table)
+
+    oldest_table = Table(title="Oldest Assignments")
+    oldest_table.add_column("Reviewer")
+    oldest_table.add_column("Applicant")
+    oldest_table.add_column("Program")
+    oldest_table.add_column("Age (days)", justify="right")
+    for assignment, age_days in report.oldest_assignments[:limit]:
+        oldest_table.add_row(
+            assignment.reviewer,
+            assignment.applicant,
+            assignment.program,
+            f"{age_days:.1f}",
+        )
+    print(oldest_table)
 
 
 if __name__ == "__main__":
