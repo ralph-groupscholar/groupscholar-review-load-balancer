@@ -1,6 +1,12 @@
 # Ralph Progress
 
 ## 2026-02-08
+- Added completed-review throughput reporting with cycle-time rollups and daily totals.
+- Added completion tracking to assignments schema plus a migration and seed data updates.
+- Updated init-db to run ordered migrations and added tests for throughput reports.
+- Documented the new throughput command in README.
+
+## 2026-02-08
 - Added backlog aging report with reviewer rollups and oldest assignment list.
 - Created report helpers with tests for age bucketing and stale rollups.
 - Seeded sample assignments to make backlog reporting meaningful.

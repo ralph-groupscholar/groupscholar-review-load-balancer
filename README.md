@@ -3,9 +3,9 @@
 Balance scholarship review assignments across reviewers while tracking load, expertise fit, and conflicts.
 
 ## Features
-- Creates and seeds a production-ready PostgreSQL schema.
+- Creates and seeds a production-ready PostgreSQL schema with completion tracking.
 - Greedy load-balancing assignments that consider tag overlap and reviewer capacity.
-- CLI commands for initialization, seeding, balancing, and reporting (including program coverage).
+- CLI commands for initialization, seeding, balancing, and reporting (including program coverage and throughput).
 
 ## Tech
 - Python 3
@@ -39,6 +39,7 @@ bin/review-load-balancer snapshot
 bin/review-load-balancer aging --limit 10
 bin/review-load-balancer programs
 bin/review-load-balancer backlog --stale-days 7 --limit 10
+bin/review-load-balancer throughput --days 14
 ```
 
 ## Notes

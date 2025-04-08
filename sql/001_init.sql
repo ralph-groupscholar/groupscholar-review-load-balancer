@@ -25,11 +25,16 @@ CREATE TABLE IF NOT EXISTS review_load_balancer.assignments (
     reviewer_id INTEGER NOT NULL REFERENCES review_load_balancer.reviewers(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'assigned',
     score NUMERIC(6,4) NOT NULL DEFAULT 0,
-    assigned_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    assigned_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX IF NOT EXISTS assignments_reviewer_status_idx
     ON review_load_balancer.assignments (reviewer_id, status);
+
+CREATE INDEX IF NOT EXISTS assignments_completed_at_idx
+    ON review_load_balancer.assignments (completed_at)
+    WHERE status = 'completed';
 
 CREATE INDEX IF NOT EXISTS applications_submitted_idx
     ON review_load_balancer.applications (submitted_at);

@@ -17,7 +17,9 @@ VALUES
     ('Olivia Park', 'STEM Scholars', ARRAY['stem', 'impact'], NOW() - INTERVAL '2 days', 'submitted'),
     ('Rafael Torres', 'Creative Futures', ARRAY['arts', 'community'], NOW() - INTERVAL '2 days', 'submitted'),
     ('Jada Stewart', 'Leadership Fellows', ARRAY['leadership', 'essay'], NOW() - INTERVAL '1 day', 'submitted'),
-    ('Leo Kim', 'Entrepreneur Track', ARRAY['business', 'finance'], NOW() - INTERVAL '1 day', 'submitted')
+    ('Leo Kim', 'Entrepreneur Track', ARRAY['business', 'finance'], NOW() - INTERVAL '1 day', 'submitted'),
+    ('Kai Morgan', 'STEM Scholars', ARRAY['stem', 'research'], NOW() - INTERVAL '12 days', 'completed'),
+    ('Imani Brooks', 'Leadership Fellows', ARRAY['leadership', 'service'], NOW() - INTERVAL '11 days', 'completed')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO review_load_balancer.assignments (application_id, reviewer_id, status, score, assigned_at)
@@ -41,5 +43,21 @@ SELECT app.id, reviewer.id, 'assigned', 0.89, NOW() - INTERVAL '3 days'
   FROM review_load_balancer.applications app
   JOIN review_load_balancer.reviewers reviewer
     ON reviewer.email = 'sofia.ramirez@groupscholar.com'
- WHERE app.applicant_name = 'Lila Nguyen'
+WHERE app.applicant_name = 'Lila Nguyen'
+ON CONFLICT (application_id) DO NOTHING;
+
+INSERT INTO review_load_balancer.assignments (application_id, reviewer_id, status, score, assigned_at, completed_at)
+SELECT app.id, reviewer.id, 'completed', 0.93, NOW() - INTERVAL '9 days', NOW() - INTERVAL '3 days'
+  FROM review_load_balancer.applications app
+  JOIN review_load_balancer.reviewers reviewer
+    ON reviewer.email = 'amina.lewis@groupscholar.com'
+ WHERE app.applicant_name = 'Kai Morgan'
+ON CONFLICT (application_id) DO NOTHING;
+
+INSERT INTO review_load_balancer.assignments (application_id, reviewer_id, status, score, assigned_at, completed_at)
+SELECT app.id, reviewer.id, 'completed', 0.88, NOW() - INTERVAL '8 days', NOW() - INTERVAL '2 days'
+  FROM review_load_balancer.applications app
+  JOIN review_load_balancer.reviewers reviewer
+    ON reviewer.email = 'sofia.ramirez@groupscholar.com'
+ WHERE app.applicant_name = 'Imani Brooks'
 ON CONFLICT (application_id) DO NOTHING;

@@ -4,9 +4,11 @@ from dataclasses import dataclass
 
 from review_load_balancer.reports import (
     BacklogAssignment,
+    CompletedAssignment,
     bucket_age,
     build_backlog_report,
     build_tag_capacity_report,
+    build_throughput_report,
 )
 
 
@@ -54,6 +56,29 @@ def test_build_backlog_report_rollup() -> None:
     assert amina_stats.total == 2
     assert amina_stats.stale == 1
     assert amina_stats.oldest_age_days == 8
+
+
+def test_build_throughput_report_rollup() -> None:
+    now = datetime(2026, 2, 8, tzinfo=timezone.utc)
+    assignments = [
+        CompletedAssignment("Amina", "STEM", now - timedelta(days=5), now - timedelta(days=2)),
+        CompletedAssignment("Amina", "STEM", now - timedelta(days=6), now - timedelta(days=1)),
+        CompletedAssignment("David", "Arts", now - timedelta(days=10), now - timedelta(days=9)),
+    ]
+
+    report = build_throughput_report(assignments, now, days=7)
+
+    assert report.total_completed == 2
+    assert report.avg_cycle_days == 4.0
+    assert report.min_cycle_days == 3.0
+    assert report.max_cycle_days == 5.0
+    assert report.daily_counts == {
+        (now - timedelta(days=2)).date().isoformat(): 1,
+        (now - timedelta(days=1)).date().isoformat(): 1,
+    }
+    assert len(report.reviewer_stats) == 1
+    assert report.reviewer_stats[0].reviewer == "Amina"
+    assert report.reviewer_stats[0].completed == 2
 
 
 def test_build_tag_capacity_report_rollup() -> None:
