@@ -33,6 +33,7 @@ bin/review-load-balancer plan --limit 10
 bin/review-load-balancer plan --apply
 bin/review-load-balancer balance
 bin/review-load-balancer coverage --top 10
+bin/review-load-balancer tag-capacity --limit 15
 bin/review-load-balancer queue
 bin/review-load-balancer snapshot
 bin/review-load-balancer aging --limit 10

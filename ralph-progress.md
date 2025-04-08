@@ -19,3 +19,8 @@
 - Added reassignment planning to suggest load-balancing moves based on reviewer utilization and tag fit.
 - Added allocator unit tests and a dev requirements file for pytest.
 - Documented the reassignment command and test setup in README.
+
+## 2026-02-08
+- Added tag capacity coverage report to compare queue demand with reviewer capacity.
+- Added tag capacity reporting helper and tests, plus pytest config for import paths.
+- Documented the new tag-capacity CLI command.

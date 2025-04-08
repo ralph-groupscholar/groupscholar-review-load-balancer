@@ -1,6 +1,28 @@
 from datetime import datetime, timedelta, timezone
 
-from review_load_balancer.reports import BacklogAssignment, bucket_age, build_backlog_report
+from dataclasses import dataclass
+
+from review_load_balancer.reports import (
+    BacklogAssignment,
+    bucket_age,
+    build_backlog_report,
+    build_tag_capacity_report,
+)
+
+
+@dataclass(frozen=True)
+class StubReviewer:
+    id: int
+    name: str
+    capacity: int
+    tags: list[str]
+    assigned: int
+
+
+@dataclass(frozen=True)
+class StubApplication:
+    id: int
+    tags: list[str]
 
 
 def test_bucket_age_boundaries() -> None:
@@ -32,3 +54,34 @@ def test_build_backlog_report_rollup() -> None:
     assert amina_stats.total == 2
     assert amina_stats.stale == 1
     assert amina_stats.oldest_age_days == 8
+
+
+def test_build_tag_capacity_report_rollup() -> None:
+    reviewers = [
+        StubReviewer(1, "Amina", 4, ["stem", "transfer"], 3),
+        StubReviewer(2, "David", 2, ["transfer"], 1),
+        StubReviewer(3, "Lila", 3, ["arts"], 3),
+    ]
+    applications = [
+        StubApplication(1, ["stem"]),
+        StubApplication(2, ["transfer"]),
+        StubApplication(3, ["transfer"]),
+        StubApplication(4, []),
+    ]
+
+    report = build_tag_capacity_report(reviewers, applications)
+
+    transfer = next(item for item in report if item.tag == "transfer")
+    assert transfer.queue_count == 2
+    assert transfer.reviewer_count == 2
+    assert transfer.capacity == 6
+    assert transfer.assigned == 4
+    assert transfer.remaining == 2
+    assert transfer.coverage_ratio == 1
+
+    untagged = next(item for item in report if item.tag == "untagged")
+    assert untagged.queue_count == 1
+    assert untagged.reviewer_count == 0
+    assert untagged.capacity == 0
+    assert untagged.remaining == 0
+    assert untagged.coverage_ratio == 0

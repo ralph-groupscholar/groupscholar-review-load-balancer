@@ -16,7 +16,13 @@ from .allocator import (
     propose_reassignments,
 )
 from .db import db_cursor, load_sql, SCHEMA
-from .reports import BacklogAssignment, build_backlog_report
+from .reports import (
+    BacklogAssignment,
+    CompletedAssignment,
+    build_backlog_report,
+    build_tag_capacity_report,
+    build_throughput_report,
+)
 
 app = typer.Typer(help="Group Scholar review load balancing CLI.")
 
@@ -26,9 +32,9 @@ SQL_DIR = Path(__file__).resolve().parents[3] / "sql"
 @app.command("init-db")
 def init_db() -> None:
     """Create schema and tables."""
-    sql = load_sql(SQL_DIR / "001_init.sql")
     with db_cursor() as cursor:
-        cursor.execute(sql)
+        for sql_path in sorted(SQL_DIR.glob("[0-9][0-9][0-9]_*.sql")):
+            cursor.execute(load_sql(sql_path))
     print("[green]Database initialized.[/green]")
 
 
@@ -234,6 +240,51 @@ def coverage(top: int = typer.Option(10, help="Top unmatched tags to show.")) ->
     print(table)
 
 
+@app.command("tag-capacity")
+def tag_capacity(
+    limit: int = typer.Option(15, help="Max tags to display."),
+    include_untagged: bool = typer.Option(True, help="Include untagged queue items."),
+) -> None:
+    """Show queue demand vs reviewer capacity by tag."""
+    reviewers = fetch_reviewers()
+    applications = fetch_unassigned_applications()
+    report = build_tag_capacity_report(
+        reviewers,
+        applications,
+        include_untagged=include_untagged,
+    )
+
+    if not report:
+        print("[yellow]No tags or queue demand found.[/yellow]")
+        return
+
+    queue_total = sum(item.queue_count for item in report)
+    print(f"[bold]Queue Demand:[/bold] {queue_total}")
+
+    table = Table(title="Tag Capacity Coverage")
+    table.add_column("Tag")
+    table.add_column("Queue", justify="right")
+    table.add_column("Reviewers", justify="right")
+    table.add_column("Capacity", justify="right")
+    table.add_column("Assigned", justify="right")
+    table.add_column("Remaining", justify="right")
+    table.add_column("Coverage", justify="right")
+
+    for item in report[:limit]:
+        coverage = "-" if item.coverage_ratio is None else f"{item.coverage_ratio:.1f}x"
+        table.add_row(
+            item.tag,
+            str(item.queue_count),
+            str(item.reviewer_count),
+            str(item.capacity),
+            str(item.assigned),
+            str(item.remaining),
+            coverage,
+        )
+
+    print(table)
+
+
 @app.command("snapshot")
 def snapshot() -> None:
     """Show assignment coverage snapshot."""
@@ -413,6 +464,70 @@ def programs() -> None:
         )
 
     print(table)
+
+
+@app.command("throughput")
+def throughput(days: int = typer.Option(14, help="Lookback window in days.")) -> None:
+    """Show review completion throughput and cycle time."""
+    query = f"""
+        SELECT r.name AS reviewer,
+               a.program,
+               s.assigned_at,
+               s.completed_at
+          FROM {SCHEMA}.assignments s
+          JOIN {SCHEMA}.reviewers r
+            ON r.id = s.reviewer_id
+          JOIN {SCHEMA}.applications a
+            ON a.id = s.application_id
+         WHERE s.status = 'completed'
+           AND s.completed_at IS NOT NULL
+           AND s.completed_at >= NOW() - (%s * INTERVAL '1 day')
+         ORDER BY s.completed_at DESC;
+    """
+    with db_cursor() as cursor:
+        cursor.execute(query, (days,))
+        rows = cursor.fetchall()
+
+    if not rows:
+        print("[yellow]No completed reviews in the selected window.[/yellow]")
+        return
+
+    assignments = [
+        CompletedAssignment(
+            reviewer=row["reviewer"],
+            program=row["program"],
+            assigned_at=row["assigned_at"],
+            completed_at=row["completed_at"],
+        )
+        for row in rows
+    ]
+    now = datetime.now(timezone.utc)
+    report = build_throughput_report(assignments, now, days)
+
+    print(
+        f"[bold]Completed:[/bold] {report.total_completed} | "
+        f"[bold]Avg Cycle:[/bold] {report.avg_cycle_days:.1f} days | "
+        f"[bold]Min/Max:[/bold] {report.min_cycle_days:.1f}/{report.max_cycle_days:.1f} days"
+    )
+
+    daily_table = Table(title="Daily Review Completions")
+    daily_table.add_column("Date")
+    daily_table.add_column("Completed", justify="right")
+    for day, count in sorted(report.daily_counts.items()):
+        daily_table.add_row(day, str(count))
+    print(daily_table)
+
+    reviewer_table = Table(title="Reviewer Throughput")
+    reviewer_table.add_column("Reviewer")
+    reviewer_table.add_column("Completed", justify="right")
+    reviewer_table.add_column("Avg Cycle (days)", justify="right")
+    for reviewer in report.reviewer_stats:
+        reviewer_table.add_row(
+            reviewer.reviewer,
+            str(reviewer.completed),
+            f"{reviewer.avg_cycle_days:.1f}",
+        )
+    print(reviewer_table)
 
 
 @app.command("backlog")
