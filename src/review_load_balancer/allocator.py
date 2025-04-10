@@ -30,6 +30,26 @@ class Assignment:
     score: float
 
 
+@dataclass(frozen=True)
+class AssignmentDetail:
+    application_id: int
+    reviewer_id: int
+    reviewer_name: str
+    applicant_name: str
+    program: str
+    tags: list[str]
+
+
+@dataclass(frozen=True)
+class ReassignmentPlan:
+    application_id: int
+    from_reviewer_id: int
+    from_reviewer_name: str
+    to_reviewer_id: int
+    to_reviewer_name: str
+    score: float
+
+
 def fetch_reviewers() -> list[Reviewer]:
     query = f"""
         SELECT r.id,
@@ -160,3 +180,131 @@ def persist_assignments(assignments: Iterable[Assignment]) -> int:
     with db_cursor() as cursor:
         cursor.executemany(query, rows)
     return len(rows)
+
+
+def fetch_active_assignments() -> list[AssignmentDetail]:
+    query = f"""
+        SELECT s.application_id,
+               s.reviewer_id,
+               r.name,
+               a.applicant_name,
+               a.program,
+               COALESCE(a.tags, '{{}}') AS tags
+          FROM {SCHEMA}.assignments s
+          JOIN {SCHEMA}.reviewers r
+            ON r.id = s.reviewer_id
+          JOIN {SCHEMA}.applications a
+            ON a.id = s.application_id
+         WHERE s.status IN ('assigned', 'in_review')
+         ORDER BY r.name, a.submitted_at ASC;
+    """
+    with db_cursor() as cursor:
+        cursor.execute(query)
+        return [
+            AssignmentDetail(
+                application_id=row[0],
+                reviewer_id=row[1],
+                reviewer_name=row[2],
+                applicant_name=row[3],
+                program=row[4],
+                tags=list(row[5] or []),
+            )
+            for row in cursor.fetchall()
+        ]
+
+
+def propose_reassignments(
+    reviewers: Iterable[Reviewer],
+    assignments: Iterable[AssignmentDetail],
+    threshold: float = 0.1,
+) -> list[ReassignmentPlan]:
+    reviewer_lookup = {reviewer.id: reviewer for reviewer in reviewers}
+    total_capacity = sum(reviewer.capacity for reviewer in reviewers if reviewer.capacity > 0)
+    total_assigned = sum(reviewer.assigned for reviewer in reviewers)
+    if total_capacity <= 0:
+        return []
+
+    target_utilization = total_assigned / total_capacity
+    reviewer_state: dict[int, dict[str, float | Reviewer]] = {}
+    for reviewer in reviewers:
+        reviewer_state[reviewer.id] = {
+            "reviewer": reviewer,
+            "assigned": reviewer.assigned,
+        }
+
+    excess: dict[int, int] = {}
+    deficit: dict[int, int] = {}
+    for reviewer in reviewers:
+        if reviewer.capacity <= 0:
+            continue
+        utilization = reviewer.assigned / reviewer.capacity
+        delta = utilization - target_utilization
+        target_assigned = reviewer.capacity * target_utilization
+        if delta >= threshold:
+            to_offload = int(round(reviewer.assigned - target_assigned))
+            if to_offload > 0:
+                excess[reviewer.id] = to_offload
+        elif delta <= -threshold:
+            to_take = int(round(target_assigned - reviewer.assigned))
+            if to_take > 0:
+                deficit[reviewer.id] = to_take
+
+    if not excess or not deficit:
+        return []
+
+    under_reviewers = [reviewer_lookup[reviewer_id] for reviewer_id in deficit]
+
+    candidates: list[tuple[float, AssignmentDetail, Reviewer]] = []
+    for assignment in assignments:
+        if assignment.reviewer_id not in excess:
+            continue
+        application = Application(
+            id=assignment.application_id,
+            applicant_name=assignment.applicant_name,
+            program=assignment.program,
+            tags=assignment.tags,
+        )
+        for reviewer in under_reviewers:
+            temp_reviewer = Reviewer(
+                id=reviewer.id,
+                name=reviewer.name,
+                capacity=reviewer.capacity,
+                tags=reviewer.tags,
+                assigned=int(reviewer_state[reviewer.id]["assigned"]),
+            )
+            score = score_reviewer(temp_reviewer, application)
+            if score <= 0:
+                continue
+            candidates.append((score, assignment, reviewer))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    plans: list[ReassignmentPlan] = []
+    for score, assignment, reviewer in candidates:
+        if excess.get(assignment.reviewer_id, 0) <= 0:
+            continue
+        if deficit.get(reviewer.id, 0) <= 0:
+            continue
+        state = reviewer_state[reviewer.id]
+        if int(state["assigned"]) >= reviewer.capacity:
+            continue
+
+        reviewer_state[reviewer.id]["assigned"] = int(state["assigned"]) + 1
+        excess[assignment.reviewer_id] -= 1
+        deficit[reviewer.id] -= 1
+
+        plans.append(
+            ReassignmentPlan(
+                application_id=assignment.application_id,
+                from_reviewer_id=assignment.reviewer_id,
+                from_reviewer_name=assignment.reviewer_name,
+                to_reviewer_id=reviewer.id,
+                to_reviewer_name=reviewer.name,
+                score=score,
+            )
+        )
+
+        if all(value <= 0 for value in excess.values()):
+            break
+
+    return plans
